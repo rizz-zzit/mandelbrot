@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mandelbrot Explorer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #04060f;
+    --panel: rgba(8, 12, 28, 0.85);
+    --border: rgba(80, 140, 255, 0.18);
+    --accent: #4f8fff;
+    --accent2: #00e5ff;
+    --text: #c8d8ff;
+    --dim: #4a5880;
+    --warn: #ffb347;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: crosshair;
+    image-rendering: pixelated;
+  }
+
+  #hud {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+  }
+
+  #title {
+    position: absolute;
+    top: 22px; left: 28px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--accent2);
+    opacity: 0.9;
+    text-shadow: 0 0 18px rgba(0,229,255,0.5);
+  }
+
+  #info {
+    position: absolute;
+    bottom: 24px; left: 28px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 18px;
+    font-size: 10px;
+    line-height: 1.9;
+    backdrop-filter: blur(8px);
+    min-width: 260px;
+  }
+  #info .row { display: flex; justify-content: space-between; gap: 24px; }
+  #info .label { color: var(--dim); letter-spacing: 0.1em; }
+  #info .val { color: var(--accent2); font-weight: 700; text-align: right; }
+
+  #precision-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    font-weight: 700;
+    background: rgba(79,143,255,0.15);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    transition: all 0.3s;
+  }
+  #precision-badge.warn {
+    background: rgba(255,179,71,0.15);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+
+  #controls {
+    position: absolute;
+    top: 22px; right: 28px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 18px;
+    font-size: 10px;
+    line-height: 2;
+    backdrop-filter: blur(8px);
+    pointer-events: all;
+  }
+  #controls .ctrl { color: var(--dim); }
+  #controls .ctrl span { color: var(--text); }
+
+  button {
+    pointer-events: all;
+    margin-top: 10px;
+    width: 100%;
+    padding: 6px 0;
+    background: rgba(79,143,255,0.1);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  button:hover {
+    background: rgba(79,143,255,0.22);
+    border-color: var(--accent);
+  }
+
+  #spinner {
+    position: absolute;
+    top: 22px; left: 50%; transform: translateX(-50%);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: var(--dim);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  #spinner.active { opacity: 1; }
+
+  #ch-h, #ch-v {
+    position: absolute;
+    background: rgba(0,229,255,0.15);
+    pointer-events: none;
+    display: none;
+  }
+  #ch-h { height: 1px; left: 0; right: 0; }
+  #ch-v { width: 1px; top: 0; bottom: 0; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="hud">
+  <div id="title">Mandelbrot Explorer</div>
+  <div id="ch-h"></div>
+  <div id="ch-v"></div>
+  <div id="spinner">RENDERING…</div>
+
+  <div id="info">
+    <div class="row"><span class="label">RE</span><span class="val" id="i-cx">—</span></div>
+    <div class="row"><span class="label">IM</span><span class="val" id="i-cy">—</span></div>
+    <div class="row"><span class="label">ZOOM</span><span class="val" id="i-zoom">1×</span></div>
+    <div class="row"><span class="label">MAX ITER</span><span class="val" id="i-iter">—</span></div>
+    <div><div id="precision-badge">FLOAT64 · STANDARD</div></div>
+  </div>
+
+  <div id="controls">
+    <div class="ctrl">SCROLL <span>zoom in / out</span></div>
+    <div class="ctrl">DRAG <span>pan view</span></div>
+    <button id="btn-reset">↺ Reset View</button>
+    <button id="btn-iter-up">↑ Max Iter ×2</button>
+    <button id="btn-iter-dn">↓ Max Iter ÷2</button>
+  </div>
+</div>
+
+<!--
+  Worker source lives here as inert text.
+  The main script below reads it, wraps it in a Blob, and passes
+  the blob: URL to new Worker() — this works on file:// with no server.
+-->
+<script id="worker-src" type="text/plain">
+// ──────────────────────────────────────────────────────────
+//  COLOUR LUT
+// ──────────────────────────────────────────────────────────
+const LUT_SIZE = 2048;
+const lut = new Uint32Array(LUT_SIZE);
+(function buildLUT() {
+  for (let i = 0; i < LUT_SIZE; i++) {
+    const angle = (i / LUT_SIZE) * Math.PI * 2;
+    const r = Math.round(128 + 127 * Math.sin(angle + 0.0));
+    const g = Math.round(128 + 127 * Math.sin(angle + 2.094));
+    const b = Math.round(128 + 127 * Math.sin(angle + 4.189));
+    lut[i] = 0xFF000000 | (b << 16) | (g << 8) | r;
+  }
+  lut[0] = 0xFF000000;
+})();
+
+function applyLUT(val) {
+  if (val === 0) return 0xFF000000;
+  const t  = (val * 8) % LUT_SIZE;
+  const ti = t | 0;
+  const tf = t - ti;
+  const c0 = lut[ti], c1 = lut[(ti + 1) % LUT_SIZE];
+  const r = ((c0 & 0xFF)         * (1 - tf) + (c1 & 0xFF)         * tf) | 0;
+  const g = (((c0 >> 8)  & 0xFF) * (1 - tf) + ((c1 >> 8)  & 0xFF) * tf) | 0;
+  const b = (((c0 >> 16) & 0xFF) * (1 - tf) + ((c1 >> 16) & 0xFF) * tf) | 0;
+  return 0xFF000000 | (b << 16) | (g << 8) | r;
+}
+
+// ──────────────────────────────────────────────────────────
+//  OPTIMIZED MANDELBROT (float64 only, 3 multiplications per iteration)
+//
+//  The algorithm uses the recurrence:
+//    y = (x + x) * y + y0       [2 multiplications: 2*x*y + y0]
+//    x = x² - y² + x0           [1 multiplication: done via cached x², y²]
+//    x² = x * x
+//    y² = y * y
+//    iterations++
+//
+//  This version works reliably at all zoom levels and requires no BigInt,
+//  no perturbation, no series approximation — just clean float64 math.
+// ──────────────────────────────────────────────────────────
+function mandelbrot(x0, y0, maxIt) {
+  let x = 0, y = 0;
+  let x2 = 0, y2 = 0;
+  let iter = 0;
+
+  while (x2 + y2 < 4 && iter < maxIt) {
+    y  = (x + x) * y + y0;     // 2*x*y + y0  (2 multiplications)
+    x  = x2 - y2 + x0;         // x² - y² + x0
+    x2 = x * x;                // (1 multiplication, cached for next iteration)
+    y2 = y * y;
+    iter++;
+  }
+
+  if (iter === maxIt) return 0;
+
+  // Smooth iteration count using escape time
+  const mag2 = x2 + y2;
+  return iter + 1 - Math.log2(Math.log2(mag2) * 0.5);
+}
+
+// ──────────────────────────────────────────────────────────
+//  TILE RENDERER
+// ──────────────────────────────────────────────────────────
+self.onmessage = function(e) {
+  const { renderID, px0, py0, pw, ph, W, H, xMin, xMax, yMin, yMax, maxIter } = e.data;
+
+  const buf = new Uint32Array(pw * ph);
+
+  // Viewport dimensions in complex plane
+  const xRange = xMax - xMin;
+  const yRange = yMax - yMin;
+
+  // Render each pixel in the tile
+  for (let row = 0; row < ph; row++) {
+    for (let col = 0; col < pw; col++) {
+      // Absolute pixel coordinates on canvas
+      const px_abs = px0 + col;
+      const py_abs = py0 + row;
+
+      // Convert pixel coordinates to complex plane
+      const x0 = xMin + (px_abs / W) * xRange;
+      const y0 = yMax - (py_abs / H) * yRange;
+
+      // Compute Mandelbrot value for this pixel
+      const val = mandelbrot(x0, y0, maxIter);
+
+      // Store as ARGB in buffer
+      buf[row * pw + col] = applyLUT(val);
+    }
+  }
+
+  // Send completed tile back to main thread
+  self.postMessage(
+    { renderID, px0, py0, pw, ph, buffer: buf.buffer },
+    [buf.buffer]
+  );
+};
+</script>
+
+<script>
+const _workerSrc  = document.getElementById('worker-src').textContent;
+const _workerBlob = new Blob([_workerSrc], { type: 'application/javascript' });
+const _workerURL  = URL.createObjectURL(_workerBlob);
+
+// ──────────────────────────────────────────────────────────
+//  STATE
+// ──────────────────────────────────────────────────────────
+const DEFAULT = {
+  xMin: -2.0, xMax: 0.47,
+  yMin: -1.12, yMax: 1.12,
+};
+
+let view     = { ...DEFAULT };
+let maxIter  = 256;
+let renderID = 0;
+
+// ──────────────────────────────────────────────────────────
+//  DOM REFS
+// ──────────────────────────────────────────────────────────
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const iCx     = document.getElementById('i-cx');
+const iCy     = document.getElementById('i-cy');
+const iZoom   = document.getElementById('i-zoom');
+const iIter   = document.getElementById('i-iter');
+const badge   = document.getElementById('precision-badge');
+const spinner = document.getElementById('spinner');
+const chH     = document.getElementById('ch-h');
+const chV     = document.getElementById('ch-v');
+
+// ──────────────────────────────────────────────────────────
+//  WORKER POOL
+//
+//  Each slot holds the Worker and an idle flag.
+//  The onmessage handler is set up per-slot so we can
+//  reference the slot directly — avoids the `this` trap
+//  that breaks pool.find() inside arrow functions.
+// ──────────────────────────────────────────────────────────
+const TILE         = 64;
+const WORKER_COUNT = navigator.hardwareConcurrency || 4;
+
+let tileQueue  = [];
+let tilesTotal = 0;
+let tilesDone  = 0;
+
+function currentZoom() {
+  return (DEFAULT.xMax - DEFAULT.xMin) / (view.xMax - view.xMin);
+}
+
+function dispatchNext(slot) {
+  if (tileQueue.length === 0) {
+    slot.idle = true;
+    return;
+  }
+  slot.idle = false;
+  const tile = tileQueue.shift();
+  slot.worker.postMessage({
+    renderID: tile.renderID,
+    px0: tile.px0, py0: tile.py0,
+    pw: tile.pw, ph: tile.ph,
+    W: tile.W, H: tile.H,
+    xMin: tile.xMin, xMax: tile.xMax,
+    yMin: tile.yMin, yMax: tile.yMax,
+    maxIter: tile.maxIter,
+  });
+}
+
+// Build pool after dispatchNext is defined.
+// Each worker's onmessage closes over its own slot — no `this` needed.
+const pool = Array.from({ length: WORKER_COUNT }, () => {
+  const slot   = { worker: null, idle: true };
+  const worker = new Worker(_workerURL);
+
+  worker.onmessage = function(e) {
+    const { renderID, px0, py0, pw, ph, buffer } = e.data;
+
+    // Drop result if a newer render has superseded this one
+    if (renderID !== currentRenderID) {
+      dispatchNext(slot);
+      return;
+    }
+
+    // Blit pixel data onto the canvas
+    const imgData = new ImageData(new Uint8ClampedArray(buffer), pw, ph);
+    ctx.putImageData(imgData, px0, py0);
+
+    tilesDone++;
+    if (tilesDone === tilesTotal) {
+      spinner.classList.remove('active');
+    }
+
+    dispatchNext(slot);
+  };
+
+  slot.worker = worker;
+  return slot;
+});
+
+// ──────────────────────────────────────────────────────────
+//  RENDER ENTRY POINT
+// ──────────────────────────────────────────────────────────
+let currentRenderID = 0;
+
+function render() {
+  const id = ++renderID;
+  currentRenderID = id;
+
+  const W = canvas.width, H = canvas.height;
+
+  const xMin = view.xMin, xMax = view.xMax;
+  const yMin = view.yMin, yMax = view.yMax;
+  const snapIter = maxIter;
+
+  spinner.classList.add('active');
+  updateHUD();
+
+  const tilesX = Math.ceil(W / TILE);
+  const tilesY = Math.ceil(H / TILE);
+  tilesTotal = tilesX * tilesY;
+  tilesDone  = 0;
+  tileQueue  = [];
+
+  for (let ty = 0; ty < tilesY; ty++) {
+    for (let tx = 0; tx < tilesX; tx++) {
+      const px0 = tx * TILE;
+      const py0 = ty * TILE;
+      tileQueue.push({
+        renderID,
+        px0, py0,
+        pw: Math.min(TILE, W - px0),
+        ph: Math.min(TILE, H - py0),
+        W, H,
+        xMin, xMax,
+        yMin, yMax,
+        maxIter: snapIter,
+      });
+    }
+  }
+
+  for (const slot of pool) {
+    if (tileQueue.length === 0) break;
+    dispatchNext(slot);
+  }
+}
+
+let renderTimer = null;
+function scheduleRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(render, 30);
+}
+
+// ──────────────────────────────────────────────────────────
+//  HUD
+// ──────────────────────────────────────────────────────────
+function updateHUD(mouseRe, mouseIm) {
+  const cx        = (view.xMin + view.xMax) / 2;
+  const cy        = (view.yMin + view.yMax) / 2;
+  const initRange = DEFAULT.xMax - DEFAULT.xMin;
+  const curRange  = view.xMax - view.xMin;
+  const zoom      = initRange / curRange;
+
+  iCx.textContent   = (mouseRe !== undefined ? mouseRe : cx).toExponential(8);
+  iCy.textContent   = (mouseIm !== undefined ? mouseIm : cy).toExponential(8);
+  iZoom.textContent = zoom < 1e4
+    ? zoom.toFixed(2) + '×'
+    : zoom.toExponential(3) + '×';
+  iIter.textContent = maxIter;
+
+  badge.textContent = 'FLOAT64 · ' + WORKER_COUNT + ' WORKERS';
+  badge.classList.remove('warn');
+}
+
+// ──────────────────────────────────────────────────────────
+//  RESIZE
+// ──────────────────────────────────────────────────────────
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  scheduleRender();
+}
+window.addEventListener('resize', resize);
+
+// ──────────────────────────────────────────────────────────
+//  COORDINATE HELPERS
+// ──────────────────────────────────────────────────────────
+function screenToWorld(sx, sy) {
+  const W = canvas.width, H = canvas.height;
+  return [
+    view.xMin + sx / W * (view.xMax - view.xMin),
+    view.yMax - sy / H * (view.yMax - view.yMin),
+  ];
+}
+
+// ──────────────────────────────────────────────────────────
+//  ZOOM
+// ──────────────────────────────────────────────────────────
+function zoomAt(sx, sy, factor) {
+  const [wx, wy]  = screenToWorld(sx, sy);
+  const newXRange = (view.xMax - view.xMin) * factor;
+  const newYRange = (view.yMax - view.yMin) * factor;
+  view.xMin = wx - (sx / canvas.width)  * newXRange;
+  view.xMax = view.xMin + newXRange;
+  view.yMax = wy + (sy / canvas.height) * newYRange;
+  view.yMin = view.yMax - newYRange;
+  scheduleRender();
+}
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
+
+// ──────────────────────────────────────────────────────────
+//  PAN
+// ──────────────────────────────────────────────────────────
+let dragging = false, dragStart = null, viewAtDrag = null;
+
+canvas.addEventListener('mousedown', e => {
+  dragging   = true;
+  dragStart  = [e.clientX, e.clientY];
+  viewAtDrag = { ...view };
+});
+
+window.addEventListener('mousemove', e => {
+  const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+  updateHUD(wx, wy);
+
+  chH.style.display = chV.style.display = 'block';
+  chH.style.top  = e.clientY + 'px';
+  chV.style.left = e.clientX + 'px';
+
+  if (!dragging) return;
+  const dx     = e.clientX - dragStart[0];
+  const dy     = e.clientY - dragStart[1];
+  const xRange = viewAtDrag.xMax - viewAtDrag.xMin;
+  const yRange = viewAtDrag.yMax - viewAtDrag.yMin;
+  view.xMin = viewAtDrag.xMin - dx / canvas.width  * xRange;
+  view.xMax = view.xMin + xRange;
+  view.yMax = viewAtDrag.yMax + dy / canvas.height * yRange;
+  view.yMin = view.yMax - yRange;
+  scheduleRender();
+});
+
+window.addEventListener('mouseup',  () => { dragging = false; });
+canvas.addEventListener('mouseleave', () => {
+  chH.style.display = chV.style.display = 'none';
+});
+
+// ──────────────────────────────────────────────────────────
+//  BUTTONS
+// ──────────────────────────────────────────────────────────
+document.getElementById('btn-reset').addEventListener('click', () => {
+  view           = { ...DEFAULT };
+  maxIter        = 256;
+  // Cancel any in-flight render and clear the queue
+  currentRenderID = ++renderID;
+  tileQueue       = [];
+  tilesDone       = 0;
+  tilesTotal      = 0;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  scheduleRender();
+});
+document.getElementById('btn-iter-up').addEventListener('click', () => {
+  maxIter = Math.min(maxIter * 2, 16384);
+  scheduleRender();
+});
+document.getElementById('btn-iter-dn').addEventListener('click', () => {
+  maxIter = Math.max(maxIter / 2, 32);
+  scheduleRender();
+});
+
+// ──────────────────────────────────────────────────────────
+//  BOOT
+// ──────────────────────────────────────────────────────────
+resize();
+
+</script>
+</body>
+</html>
